@@ -19,16 +19,25 @@
     
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; }
-        .glass-card { background: rgba(255, 255, 255, 0.95); box-shadow: 0 4px 15px rgba(0,0,0,0.03); border-radius: 1rem; }
         .app-gradient { background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); }
         .no-select { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+        
+        .select-custom { 
+            appearance: none; 
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); 
+            background-repeat: no-repeat; 
+            background-position: left 0.5rem center; 
+            background-size: 1em; 
+        }
+        
+        .calendar-scroll::-webkit-scrollbar { height: 6px; }
+        .calendar-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        // --- הגדרות Firebase הקיים שלך ---
         const firebaseConfig = {
             apiKey: "AIzaSyCDIQc5vKjMDVAao47PoapqdowILgJEbvE",
             authDomain: "iec--weektable.firebaseapp.com",
@@ -40,14 +49,14 @@
         
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
-        // שימוש באוסף חדש לחלוטין כדי לא להתנגש עם סידור העבודה
         const docRef = db.collection('sports_tracker').doc('amit_weekly');
 
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect } = React;
 
         const DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
         
         const WORKOUTS = {
+            'מנוחה': { icon: '🛋️', color: 'gray' },
             'חדר כושר (חזה)': { icon: '🏋️‍♂️', color: 'blue' },
             'חדר כושר (גב)': { icon: '💪', color: 'indigo' },
             'שחייה': { icon: '🏊‍♂️', color: 'cyan' },
@@ -59,19 +68,17 @@
 
         const generateEmptySchedule = () => {
             let sched = {};
-            DAYS.forEach(day => { sched[day] = []; });
+            DAYS.forEach(day => { sched[day] = ['']; });
             return sched;
         };
 
-        // חישוב מתי היה יום שבת האחרון בשעה 15:00
         const getLastSaturday1500 = () => {
             const now = new Date();
             const d = new Date(now);
-            const day = d.getDay(); // 0=Sun, 6=Sat
+            const day = d.getDay(); 
             let daysToSubtract = day - 6; 
             if (daysToSubtract < 0) daysToSubtract += 7; 
             
-            // אם היום שבת אבל לפני 15:00, מתייחסים לשבת שעברה
             if (daysToSubtract === 0 && now.getHours() < 15) {
                 daysToSubtract = 7;
             }
@@ -80,6 +87,7 @@
             return d.getTime();
         };
 
+        // הפונקציה שהייתה חסרה! מחשבת מתי שבת הבאה כדי להציג במסך
         const getNextSaturday1500 = () => {
             const now = new Date();
             const d = new Date(now);
@@ -93,42 +101,59 @@
             return d;
         };
 
+        const getWeekDates = (lastSatTime) => {
+            const dates = {};
+            const baseDate = new Date(lastSatTime);
+            DAYS.forEach((day, index) => {
+                const currentDate = new Date(baseDate);
+                currentDate.setDate(baseDate.getDate() + index + 1); 
+                dates[day] = `${currentDate.getDate()}/${currentDate.getMonth() + 1}`;
+            });
+            return dates;
+        };
+
         function App() {
             const [schedule, setSchedule] = useState(generateEmptySchedule());
-            const [coachNotes, setCoachNotes] = useState("");
-            const [isSavingNotes, setIsSavingNotes] = useState(false);
+            const [notesLog, setNotesLog] = useState([]); // מערך של עדכוני מאמן
+            const [currentNote, setCurrentNote] = useState(""); // הטקסט שמוקלד כרגע
             const [lastUpdated, setLastUpdated] = useState("");
             const [isLoading, setIsLoading] = useState(true);
-            const notesTimeout = useRef(null);
+            const [weekDates, setWeekDates] = useState({});
 
             useEffect(() => {
                 const unsubscribe = docRef.onSnapshot((doc) => {
+                    const lastSat1500 = getLastSaturday1500();
+                    setWeekDates(getWeekDates(lastSat1500));
+
                     if (doc.exists) {
                         const data = doc.data();
-                        const lastSat1500 = getLastSaturday1500();
                         const dbLastReset = data.lastReset || 0;
 
                         if (lastSat1500 > dbLastReset) {
                             performWeeklyReset();
                         } else {
-                            setSchedule(data.schedule || generateEmptySchedule());
-                            if (data.coachNotes !== undefined && document.activeElement.id !== 'coach-notes') {
-                                setCoachNotes(data.coachNotes);
-                            }
+                            const loadedSchedule = data.schedule || generateEmptySchedule();
+                            DAYS.forEach(day => {
+                                if (!loadedSchedule[day] || loadedSchedule[day].length === 0) {
+                                    loadedSchedule[day] = [''];
+                                }
+                            });
+                            
+                            setSchedule(loadedSchedule);
+                            setNotesLog(data.notesLog || []);
                             setLastUpdated(data.lastUpdated || "");
                             setIsLoading(false);
                         }
                     } else {
                         docRef.set({
                             schedule: generateEmptySchedule(),
-                            coachNotes: "",
+                            notesLog: [],
                             lastUpdated: "",
                             lastReset: Date.now()
                         });
+                        setIsLoading(false);
                     }
-                }, (error) => {
-                    console.error("שגיאת התחברות:", error);
-                });
+                }, (error) => console.error("שגיאת התחברות:", error));
 
                 return () => unsubscribe();
             }, []);
@@ -137,173 +162,249 @@
                 const empty = generateEmptySchedule();
                 docRef.update({
                     schedule: empty,
-                    coachNotes: "",
+                    notesLog: [],
                     lastUpdated: "🔄 המערכת אופסה אוטומטית לקראת שבוע חדש",
                     lastReset: Date.now()
                 });
             };
 
-            const updateCloud = (newSchedule, notesStr = coachNotes) => {
+            const updateCloudSchedule = (newSchedule) => {
                 const now = new Date();
-                const stamp = `עודכן לאחרונה: ${now.toLocaleDateString('he-IL')} ב-${now.toLocaleTimeString('he-IL', {hour: '2-digit', minute:'2-digit'})}`;
+                const stamp = `הלו"ז עודכן לאחרונה: ${now.toLocaleDateString('he-IL')} ב-${now.toLocaleTimeString('he-IL', {hour: '2-digit', minute:'2-digit'})}`;
                 
                 docRef.update({
                     schedule: newSchedule,
-                    coachNotes: notesStr,
                     lastUpdated: stamp
-                }).catch(err => alert("שגיאה בשמירה לענן."));
+                }).catch(err => console.error("שגיאה בשמירה לענן."));
             };
 
-            const handleWorkoutToggle = (day, workoutName) => {
-                let dayWorkouts = [...schedule[day]];
-                let newSchedule = { ...schedule };
+            const handleAddNote = () => {
+                if (!currentNote.trim()) return;
                 
-                // הסרה אם כבר קיים
-                if (dayWorkouts.includes(workoutName)) {
-                    dayWorkouts = dayWorkouts.filter(w => w !== workoutName);
-                } 
-                // טיפול בתוספת של אימון "אחר" חופשי
-                else if (workoutName === 'אחר') {
-                    const reason = window.prompt("פרט איזה אימון (למשל: ספרינטים, פאדל ערב, יוגה):");
+                const now = new Date();
+                const stamp = `${now.toLocaleDateString('he-IL')} בשעה ${now.toLocaleTimeString('he-IL', {hour: '2-digit', minute:'2-digit'})}`;
+                
+                const newNoteObj = {
+                    id: Date.now(),
+                    text: currentNote.trim(),
+                    date: stamp
+                };
+                
+                const newLog = [newNoteObj, ...notesLog];
+                setNotesLog(newLog);
+                setCurrentNote(""); 
+                
+                docRef.update({
+                    notesLog: newLog,
+                    lastUpdated: `עדכון מאמן התווסף ב: ${stamp}`
+                }).catch(err => console.error("שגיאה בשמירת הערה לענן."));
+            };
+
+            const handleDeleteNote = (id) => {
+                if(window.confirm("למחוק את העדכון הזה?")) {
+                    const newLog = notesLog.filter(n => n.id !== id);
+                    setNotesLog(newLog);
+                    docRef.update({ notesLog: newLog });
+                }
+            };
+
+            const addWorkoutSlot = (day) => {
+                const newSchedule = { ...schedule };
+                newSchedule[day] = [...newSchedule[day], ''];
+                setSchedule(newSchedule);
+                updateCloudSchedule(newSchedule);
+            };
+
+            const removeWorkoutSlot = (day, index) => {
+                const newSchedule = { ...schedule };
+                newSchedule[day].splice(index, 1);
+                if (newSchedule[day].length === 0) {
+                    newSchedule[day].push('');
+                }
+                setSchedule(newSchedule);
+                updateCloudSchedule(newSchedule);
+            };
+
+            const handleWorkoutChange = (day, index, newValue) => {
+                const newSchedule = { ...schedule };
+                
+                if (newValue === 'אחר') {
+                    const reason = window.prompt("פרט איזה אימון (למשל: ספרינטים, פאדל):");
                     if (reason && reason.trim() !== '') {
-                        dayWorkouts.push(`אחר: ${reason.trim()}`);
+                        newSchedule[day][index] = `אחר: ${reason.trim()}`;
+                    } else {
+                        return; 
                     }
-                } 
-                // בחירה רגילה
-                else {
-                    dayWorkouts.push(workoutName);
+                } else {
+                    newSchedule[day][index] = newValue;
                 }
                 
-                newSchedule[day] = dayWorkouts;
                 setSchedule(newSchedule);
-                updateCloud(newSchedule);
+                updateCloudSchedule(newSchedule);
             };
 
-            // שמירה אוטומטית להערות המאמן בעת הקלדה ממושכת או עזיבת התיבה
-            const handleNotesChange = (e) => {
-                const val = e.target.value;
-                setCoachNotes(val);
-                setIsSavingNotes(true);
-                
-                if (notesTimeout.current) clearTimeout(notesTimeout.current);
-                notesTimeout.current = setTimeout(() => {
-                    updateCloud(schedule, val);
-                    setIsSavingNotes(false);
-                }, 1000);
-            };
-
-            const getWorkoutStyle = (workoutName, isSelected = false) => {
+            const getBaseColor = (workoutName) => {
+                if (!workoutName) return '';
                 const baseName = workoutName.startsWith('אחר:') ? 'אחר' : workoutName;
-                const color = WORKOUTS[baseName] ? WORKOUTS[baseName].color : 'gray';
-                
-                const styles = {
-                    'blue': isSelected ? 'bg-blue-500 text-white border-blue-600' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100',
-                    'indigo': isSelected ? 'bg-indigo-500 text-white border-indigo-600' : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100',
-                    'cyan': isSelected ? 'bg-cyan-500 text-white border-cyan-600' : 'bg-cyan-50 text-cyan-700 border-cyan-200 hover:bg-cyan-100',
-                    'green': isSelected ? 'bg-green-500 text-white border-green-600' : 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100',
-                    'yellow': isSelected ? 'bg-yellow-500 text-white border-yellow-600' : 'bg-yellow-50 text-yellow-700 border-yellow-200 hover:bg-yellow-100',
-                    'lime': isSelected ? 'bg-lime-500 text-white border-lime-600' : 'bg-lime-50 text-lime-700 border-lime-200 hover:bg-lime-100',
-                    'purple': isSelected ? 'bg-purple-500 text-white border-purple-600' : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                };
-                return styles[color] || styles['blue'];
-            };
-
-            const getIcon = (workoutName) => {
-                const baseName = workoutName.startsWith('אחר:') ? 'אחר' : workoutName;
-                return WORKOUTS[baseName] ? WORKOUTS[baseName].icon : '📌';
+                return WORKOUTS[baseName] ? WORKOUTS[baseName].color : '';
             };
 
             if (isLoading) {
                 return (
                     <div className="flex justify-center items-center h-screen bg-gray-50">
-                        <div className="text-xl font-bold text-orange-600 animate-pulse">טוען נתוני אימונים... 🏋️‍♂️</div>
+                        <div className="text-xl font-bold text-orange-600 animate-pulse">טוען יומן אימונים... 🗓️</div>
                     </div>
                 );
             }
 
             const nextResetDate = getNextSaturday1500();
-            const nextResetStr = `שבת, ${nextResetDate.getDate()}/${nextResetDate.getMonth() + 1} בשעה 15:00`;
+            const nextResetStr = `שבת, ${nextResetDate.getDate()}/${nextResetDate.getMonth() + 1} ב-15:00`;
 
             return (
-                <div className="max-w-5xl mx-auto p-4 pb-20 no-select">
+                <div className="max-w-7xl mx-auto p-4 pb-20 no-select">
                     
-                    <header className="app-gradient text-white p-6 rounded-2xl shadow-lg mb-4 text-center relative overflow-hidden">
-                        <h1 className="text-3xl font-black mb-2 relative z-10">תכנון אימונים אישי</h1>
-                        <p className="text-orange-100 text-lg font-medium relative z-10">עמית - מעקב שבועי 🏃‍♂️</p>
+                    <header className="app-gradient text-white p-6 rounded-xl shadow mb-6 text-center relative overflow-hidden">
+                        <h1 className="text-2xl font-black mb-1">יומן אימונים אישי</h1>
+                        <p className="text-orange-100 text-sm font-medium">עמית | תצוגה שבועית</p>
                     </header>
 
-                    <div className="text-center mb-8 flex flex-col sm:flex-row justify-center items-center gap-3">
-                        <span className="inline-block bg-white border border-gray-200 text-gray-600 text-sm font-bold px-4 py-2 rounded-full shadow-sm">
-                            ⏳ איפוס המערכת: {nextResetStr}
-                        </span>
-                        {lastUpdated && (
-                            <span className="inline-block bg-gray-100 text-gray-500 text-xs px-3 py-2 rounded-full">
+                    {lastUpdated && (
+                        <div className="text-center mb-6">
+                            <span className="inline-block bg-gray-200 text-gray-600 text-xs font-bold px-3 py-1.5 rounded-full shadow-sm">
                                 {lastUpdated}
                             </span>
-                        )}
-                    </div>
+                        </div>
+                    )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4 mb-8">
-                        {DAYS.map(day => (
-                            <div key={day} className="glass-card bg-white p-4 border border-gray-200 flex flex-col h-full hover:shadow-md transition-shadow">
-                                <h3 className="text-lg font-black text-gray-800 border-b-2 border-orange-100 pb-2 mb-4 text-center">{day}</h3>
-                                
-                                <div className="flex flex-col gap-2 flex-1">
-                                    {/* הצגת אימונים קיימים שנבחרו (כולל הזנות טקסט חופשי של "אחר") */}
-                                    {schedule[day].map(selectedWorkout => (
-                                        <button
-                                            key={selectedWorkout}
-                                            onClick={() => handleWorkoutToggle(day, selectedWorkout)}
-                                            className={`p-2 rounded-lg font-bold text-sm border-2 text-right flex justify-between items-center transition-colors ${getWorkoutStyle(selectedWorkout, true)}`}
-                                            title="לחץ כדי להסיר"
-                                        >
-                                            <span className="truncate flex-1">{selectedWorkout}</span>
-                                            <span>{getIcon(selectedWorkout)}</span>
-                                        </button>
-                                    ))}
-
-                                    {/* אופציות לבחירה */}
-                                    <div className="mt-auto pt-4 border-t border-gray-100 flex flex-wrap gap-1.5 justify-center">
-                                        {Object.keys(WORKOUTS).map(workout => {
-                                            // אם האימון נבחר במדויק מתוך הרשימה הסגורה (לא חל על "אחר" חופשי)
-                                            if (schedule[day].includes(workout) && workout !== 'אחר') return null;
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+                        <div className="flex flex-col md:flex-row calendar-scroll md:overflow-x-visible">
+                            {DAYS.map((day, i) => (
+                                <div key={day} className={`flex-1 flex flex-col min-w-[140px] p-3 ${i !== 0 ? 'border-t md:border-t-0 md:border-r border-gray-100' : ''}`}>
+                                    
+                                    <div className="text-center mb-4 flex flex-col items-center">
+                                        <span className="text-gray-400 text-xs font-bold uppercase tracking-wider">{day}</span>
+                                        <span className="text-2xl font-black text-gray-800 mt-1">{weekDates[day]}</span>
+                                    </div>
+                                    
+                                    <div className="flex flex-col gap-2 flex-1">
+                                        {schedule[day].map((workout, index) => {
+                                            const isOther = workout && workout.startsWith('אחר:');
+                                            const selectValue = isOther ? 'אחר' : (workout || '');
+                                            const color = getBaseColor(workout);
                                             
+                                            const bgClasses = {
+                                                '': 'bg-gray-50 border-gray-200 text-gray-500 border-dashed hover:border-solid hover:border-gray-300',
+                                                'gray': 'bg-gray-100 border-gray-300 text-gray-700',
+                                                'blue': 'bg-blue-100 border-blue-300 text-blue-900',
+                                                'indigo': 'bg-indigo-100 border-indigo-300 text-indigo-900',
+                                                'cyan': 'bg-cyan-100 border-cyan-300 text-cyan-900',
+                                                'green': 'bg-green-100 border-green-300 text-green-900',
+                                                'yellow': 'bg-yellow-100 border-yellow-300 text-yellow-900',
+                                                'lime': 'bg-lime-100 border-lime-300 text-lime-900',
+                                                'purple': 'bg-purple-100 border-purple-300 text-purple-900'
+                                            };
+                                            const currentBg = bgClasses[color] || bgClasses[''];
+
                                             return (
-                                                <button
-                                                    key={workout}
-                                                    onClick={() => handleWorkoutToggle(day, workout)}
-                                                    className={`px-2 py-1.5 rounded border text-xs font-bold transition-colors ${getWorkoutStyle(workout, false)}`}
-                                                    title={`הוסף ${workout}`}
-                                                >
-                                                    {WORKOUTS[workout].icon} {workout === 'אחר' ? 'הוסף חריג' : workout.split(' ')[0]}
-                                                </button>
-                                            );
+                                                <div key={index} className="flex flex-col group relative">
+                                                    <div className="flex items-center gap-1">
+                                                        <select 
+                                                            value={selectValue}
+                                                            onChange={(e) => handleWorkoutChange(day, index, e.target.value)}
+                                                            className={`select-custom w-full p-2 pl-6 pr-2 border rounded-lg font-bold text-[13px] outline-none transition-all cursor-pointer ${currentBg}`}
+                                                        >
+                                                            <option value="" disabled>בחר אימון...</option>
+                                                            {Object.keys(WORKOUTS).map(wName => (
+                                                                <option key={wName} value={wName}>
+                                                                    {WORKOUTS[wName].icon} {wName}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        {workout && (
+                                                            <button 
+                                                                onClick={() => removeWorkoutSlot(day, index)}
+                                                                className="text-gray-300 hover:text-red-500 transition-colors p-1"
+                                                                title="מחק אימון"
+                                                            >
+                                                                ✕
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {isOther && (
+                                                        <div className="text-[11px] font-medium text-purple-800 bg-purple-50 px-2 py-1 rounded border border-purple-200 mt-1 shadow-sm">
+                                                            {workout.replace('אחר: ', '')}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )
                                         })}
+                                        
+                                        <button
+                                            onClick={() => addWorkoutSlot(day)}
+                                            className="mt-1 flex items-center justify-center gap-1 w-full py-1 text-xs font-bold text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded transition-colors"
+                                        >
+                                            <span className="text-lg leading-none">+</span> הוסף
+                                        </button>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
 
-                    {/* אזור המאמן */}
-                    <div className="glass-card p-6 border border-gray-200 bg-white">
+                    {/* אזור עדכוני המאמן - מתפקד כיומן (Feed) */}
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                                <span>📋</span> סיכום שבועי - אזור המאמן
+                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                <span>📋</span> סיכומים והערות מאמן
                             </h2>
-                            {isSavingNotes && <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded font-bold">שומר...</span>}
+                            <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded">איפוס: {nextResetStr}</span>
                         </div>
-                        <p className="text-sm text-gray-500 mb-4">
-                            המאמן יכול לכתוב כאן דגשים ומסקנות מהשבוע החולף. הנתונים נשמרים אוטומטית ויאופסו יחד עם הלו"ז בכל שבת.
-                        </p>
-                        <textarea
-                            id="coach-notes"
-                            value={coachNotes}
-                            onChange={handleNotesChange}
-                            onBlur={() => updateCloud(schedule, coachNotes)}
-                            placeholder="הקלד כאן את הדגשים לאימונים, מסקנות או הערות לשיפור..."
-                            className="w-full h-32 p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none transition-all text-gray-700"
-                        />
+                        
+                        <div className="mb-6 bg-orange-50/50 p-4 rounded-lg border border-orange-100">
+                            <textarea
+                                value={currentNote}
+                                onChange={(e) => setCurrentNote(e.target.value)}
+                                placeholder="המאמן - הקלד כאן סיכום, דגש או הערה חדשה..."
+                                className="w-full h-20 p-3 border border-orange-200 bg-white rounded-lg focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none resize-none transition-all text-gray-700 text-sm mb-3"
+                            />
+                            <div className="text-left">
+                                <button 
+                                    onClick={handleAddNote}
+                                    disabled={!currentNote.trim()}
+                                    className="bg-orange-500 text-white px-5 py-2 rounded-lg font-bold text-sm hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                                >
+                                    💾 הוסף עדכון
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                            {notesLog.length === 0 ? (
+                                <div className="text-center text-gray-400 text-sm py-4 border-2 border-dashed border-gray-100 rounded-lg">
+                                    אין עדיין הערות מהמאמן לשבוע זה.
+                                </div>
+                            ) : (
+                                notesLog.map(note => (
+                                    <div key={note.id} className="bg-white border border-gray-200 p-4 rounded-lg shadow-sm relative group hover:border-orange-200 transition-colors">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <span className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded">
+                                                🗓️ {note.date}
+                                            </span>
+                                            <button 
+                                                onClick={() => handleDeleteNote(note.id)}
+                                                className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                                                title="מחק עדכון זה"
+                                            >
+                                                🗑️
+                                            </button>
+                                        </div>
+                                        <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                                            {note.text}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
                     </div>
                 </div>
             );
